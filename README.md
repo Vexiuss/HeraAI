@@ -1,28 +1,42 @@
 # HeraAI
 
-# HeraAI Voice Chat Prototype
+# HeraAI Voice Chat
 
-This is a simple prototype for a voice chat AI using Python. It uses:
-- SpeechRecognition + PyAudio for speech-to-text
-- OpenAI GPT-4 for conversational AI
-- pyttsx3 for text-to-speech (offline)
+This project is an AI voice chat assistant using open-source LLMs (via Ollama) and realistic speech synthesis (Edge TTS).
+
+## Features
+- Real-time voice chat with AI
+- Local LLM (Llama 3 or compatible) via Ollama
+- Realistic text-to-speech using Microsoft Edge TTS
+- Conversation history for context
+
+## Requirements
+- Python 3.8+
+- See `requirements.txt` for dependencies
+- Ollama (https://ollama.com/) with a model (e.g., llama3) pulled and running
 
 ## Setup
 1. Install dependencies:
    ```
    pip install -r requirements.txt
    ```
-2. Set your OpenAI API key as an environment variable:
-   - On Windows (PowerShell):
-     ```
-     $env:OPENAI_API_KEY="your-api-key-here"
-     ```
+2. Install and run Ollama:
+   - Download from https://ollama.com/download
+   - Pull a model (e.g., `ollama pull llama3`)
+   - Start Ollama: `ollama run llama3`
 
 ## Usage
-Run the main script:
-```
-python main.py
-```
+- To start the voice chat AI:
+  ```
+  python main.py
+  ```
+- To test the TTS voice only:
+  ```
+  python test_tts.py
+  ```
 
-Speak into your microphone and the AI will respond with voice.
+## Customization
+- Change the voice in `main.py` or `test_tts.py` by editing the `voice` variable (see Edge TTS docs for available voices).
+
+---
 
