@@ -7,7 +7,10 @@ edge-tts>=6.1.6
 pygame>=2.0.0
 chromadb>=0.4.24
 sentence-transformers>=2.6.1
-numpy>=1.21.0
+# NumPy 2.0+ compatibility handled by our compatibility layer
+numpy>=2.0.0
+# ChromaDB dependencies
+hnswlib>=0.7.0
 # Advanced Memory Enhancement packages
 scikit-learn>=1.3.0
 networkx>=3.0.0
