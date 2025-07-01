@@ -208,10 +208,17 @@ class AdvancedMemorySystem:
         if os.path.exists(relationships_file):
             try:
                 with open(relationships_file, 'rb') as f:
-                    self.relationship_graph = pickle.load(f)
+                    loaded_relationships = pickle.load(f)
+                    # Convert regular dict back to defaultdict(set) to prevent KeyError
+                    self.relationship_graph = defaultdict(set)
+                    for key, value in loaded_relationships.items():
+                        self.relationship_graph[key] = set(value) if not isinstance(value, set) else value
             except Exception as e:
                 print(f"⚠️ Error loading memory relationships: {e}")
                 self.relationship_graph = defaultdict(set)
+        else:
+            # Initialize as defaultdict(set) if file doesn't exist
+            self.relationship_graph = defaultdict(set)
         
         # Synchronize ChromaDB with memory_nodes to prevent KeyError
         self.synchronize_memory_data()
@@ -369,14 +376,22 @@ class AdvancedMemorySystem:
         """Find relationships between memories based on semantic similarity"""
         related_memories = []
         
+        # Ensure relationship_graph is properly initialized as defaultdict(set)
+        if not isinstance(self.relationship_graph, defaultdict):
+            self.relationship_graph = defaultdict(set, self.relationship_graph)
+        
         for memory_id, node in self.memory_nodes.items():
             if memory_id != new_memory_id:
-                similarity = cosine_similarity([new_embedding], [node.embedding])[0][0]
-                if similarity > threshold:
-                    related_memories.append(memory_id)
-                    # Add bidirectional relationship
-                    self.relationship_graph[new_memory_id].add(memory_id)
-                    self.relationship_graph[memory_id].add(new_memory_id)
+                try:
+                    similarity = cosine_similarity([new_embedding], [node.embedding])[0][0]
+                    if similarity > threshold:
+                        related_memories.append(memory_id)
+                        # Add bidirectional relationship with error handling
+                        self.relationship_graph[new_memory_id].add(memory_id)
+                        self.relationship_graph[memory_id].add(new_memory_id)
+                except Exception as e:
+                    print(f"⚠️ Error processing relationship for {memory_id}: {e}")
+                    continue
         
         return related_memories
     
