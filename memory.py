@@ -212,6 +212,63 @@ class AdvancedMemorySystem:
             except Exception as e:
                 print(f"⚠️ Error loading memory relationships: {e}")
                 self.relationship_graph = defaultdict(set)
+        
+        # Synchronize ChromaDB with memory_nodes to prevent KeyError
+        self.synchronize_memory_data()
+    
+    def synchronize_memory_data(self):
+        """Synchronize ChromaDB data with memory_nodes dictionary to prevent KeyErrors"""
+        if not self.collection:
+            return
+        
+        try:
+            with SuppressStderr():
+                # Get all IDs from ChromaDB
+                chroma_results = self.collection.get()
+                chroma_ids = set(chroma_results['ids'])
+                memory_node_ids = set(self.memory_nodes.keys())
+                
+                # Find mismatches
+                missing_in_nodes = chroma_ids - memory_node_ids
+                missing_in_chroma = memory_node_ids - chroma_ids
+                
+                # Remove orphaned ChromaDB entries
+                if missing_in_nodes:
+                    print(f"🔧 Cleaning up {len(missing_in_nodes)} orphaned ChromaDB entries")
+                    self.collection.delete(ids=list(missing_in_nodes))
+                
+                # Remove orphaned memory nodes
+                if missing_in_chroma:
+                    print(f"🔧 Cleaning up {len(missing_in_chroma)} orphaned memory nodes")
+                    for orphaned_id in missing_in_chroma:
+                        if orphaned_id in self.memory_nodes:
+                            del self.memory_nodes[orphaned_id]
+                
+                # Rebuild missing memory nodes from ChromaDB data if any exist
+                if len(chroma_results['ids']) > len(self.memory_nodes):
+                    print("🔧 Rebuilding missing memory nodes from ChromaDB data")
+                    for i, memory_id in enumerate(chroma_results['ids']):
+                        if memory_id not in self.memory_nodes:
+                            # Reconstruct memory node from ChromaDB data
+                            try:
+                                self.memory_nodes[memory_id] = MemoryNode(
+                                    id=memory_id,
+                                    content=chroma_results['documents'][i],
+                                    embedding=chroma_results['embeddings'][i] if chroma_results['embeddings'] else [],
+                                    metadata=chroma_results['metadatas'][i],
+                                    relationships=[],
+                                    importance_score=chroma_results['metadatas'][i].get('importance', 0.5),
+                                    access_count=0,
+                                    last_accessed=chroma_results['metadatas'][i].get('timestamp', datetime.utcnow().isoformat()),
+                                    emotional_context={}
+                                )
+                            except Exception as e:
+                                print(f"⚠️ Could not rebuild memory node {memory_id}: {e}")
+                
+                print(f"✅ Memory synchronization complete. {len(self.memory_nodes)} nodes loaded.")
+                
+        except Exception as e:
+            print(f"⚠️ Error during memory synchronization: {e}")
     
     def save_user_data(self):
         """Save user-specific memory data structures"""
@@ -425,7 +482,10 @@ class AdvancedMemorySystem:
             
             # Update memory nodes with cluster info
             for i, memory_id in enumerate(memory_ids):
-                self.memory_nodes[memory_id].cluster_id = int(cluster_labels[i])
+                if memory_id in self.memory_nodes:
+                    self.memory_nodes[memory_id].cluster_id = int(cluster_labels[i])
+                else:
+                    print(f"⚠️ Warning: Memory node {memory_id} not found during clustering")
             
             # Create cluster objects
             new_clusters = {}
@@ -434,12 +494,12 @@ class AdvancedMemorySystem:
                 
                 if cluster_memories:
                     # Generate cluster name and description
-                    cluster_texts = [self.memory_nodes[mid].content for mid in cluster_memories[:5]]
+                    cluster_texts = [self.memory_nodes[mid].content for mid in cluster_memories[:5] if mid in self.memory_nodes]
                     cluster_name = self.generate_cluster_name(cluster_texts)
                     cluster_description = self.generate_cluster_description(cluster_texts)
                     
                     # Calculate cluster importance
-                    cluster_importance = np.mean([self.memory_nodes[mid].importance_score for mid in cluster_memories])
+                    cluster_importance = np.mean([self.memory_nodes[mid].importance_score for mid in cluster_memories if mid in self.memory_nodes])
                     
                     new_clusters[cluster_id] = MemoryCluster(
                         id=cluster_id,
@@ -537,67 +597,76 @@ class AdvancedMemorySystem:
             enhanced_results = []
             for i, memory_id in enumerate(all_memory_ids[:top_k]):
                 if memory_id in self.memory_nodes:
-                    node = self.memory_nodes[memory_id]
-                    
-                    # Update access count
-                    node.access_count += 1
-                    node.last_accessed = datetime.utcnow().isoformat()
-                    
-                    # Calculate comprehensive score
-                    semantic_similarity = cosine_similarity([query_embedding], [node.embedding])[0][0]
-                    
-                    # Time decay factor
-                    memory_time = datetime.fromisoformat(node.metadata['timestamp'])
-                    time_diff = datetime.utcnow() - memory_time
-                    time_decay = max(0.1, 1.0 - (time_diff.days / 365.0))  # Decay over a year
-                    
-                    # Access frequency boost
-                    access_boost = min(0.3, node.access_count * 0.05)
-                    
-                    # Relationship boost
-                    relationship_boost = 0.1 if memory_id in relationship_results else 0.0
-                    
-                    # Cluster boost
-                    cluster_boost = 0.1 if memory_id in cluster_results else 0.0
-                    
-                    # Composite score
-                    composite_score = (
-                        semantic_similarity * 0.4 +
-                        node.importance_score * 0.3 +
-                        time_decay * 0.1 +
-                        access_boost +
-                        relationship_boost +
-                        cluster_boost
-                    )
-                    
-                    result = {
-                        'id': memory_id,
-                        'text': node.content,
-                        'metadata': node.metadata,
-                        'semantic_similarity': semantic_similarity,
-                        'importance_score': node.importance_score,
-                        'composite_score': composite_score,
-                        'time_decay': time_decay,
-                        'access_count': node.access_count,
-                        'cluster_id': node.cluster_id,
-                        'relationships': node.relationships,
-                        'emotional_context': node.emotional_context,
-                        'retrieval_strategy': self.get_retrieval_strategy(memory_id, results['ids'][0], 
-                                                                        cluster_results, relationship_results)
-                    }
-                    
-                    enhanced_results.append(result)
+                    try:
+                        node = self.memory_nodes[memory_id]
+                        
+                        # Update access count
+                        node.access_count += 1
+                        node.last_accessed = datetime.utcnow().isoformat()
+                        
+                        # Calculate comprehensive score
+                        semantic_similarity = cosine_similarity([query_embedding], [node.embedding])[0][0]
+                        
+                        # Time decay factor
+                        memory_time = datetime.fromisoformat(node.metadata['timestamp'])
+                        time_diff = datetime.utcnow() - memory_time
+                        time_decay = max(0.1, 1.0 - (time_diff.days / 365.0))  # Decay over a year
+                        
+                        # Access frequency boost
+                        access_boost = min(0.3, node.access_count * 0.05)
+                        
+                        # Relationship boost
+                        relationship_boost = 0.1 if memory_id in relationship_results else 0.0
+                        
+                        # Cluster boost
+                        cluster_boost = 0.1 if memory_id in cluster_results else 0.0
+                        
+                        # Composite score
+                        composite_score = (
+                            semantic_similarity * 0.4 +
+                            node.importance_score * 0.3 +
+                            time_decay * 0.1 +
+                            access_boost +
+                            relationship_boost +
+                            cluster_boost
+                        )
+                        
+                        result = {
+                            'id': memory_id,
+                            'text': node.content,
+                            'metadata': node.metadata,
+                            'semantic_similarity': semantic_similarity,
+                            'importance_score': node.importance_score,
+                            'composite_score': composite_score,
+                            'time_decay': time_decay,
+                            'access_count': node.access_count,
+                            'cluster_id': node.cluster_id,
+                            'relationships': node.relationships,
+                            'emotional_context': node.emotional_context,
+                            'retrieval_strategy': self.get_retrieval_strategy(memory_id, results['ids'][0], 
+                                                                            cluster_results, relationship_results)
+                        }
+                        
+                        enhanced_results.append(result)
+                    except KeyError as e:
+                        print(f"⚠️ Warning: Memory node {memory_id} not found during retrieval: {e}")
+                        continue
             
             # Sort by composite score
             enhanced_results.sort(key=lambda x: x['composite_score'], reverse=True)
             
-            # Apply quality filters
+            # Apply STRICT quality filters to prevent hallucinations
             filtered_results = []
             for result in enhanced_results:
-                # Quality thresholds
-                if (result['semantic_similarity'] > 0.2 or 
-                    result['importance_score'] > 0.6 or
-                    result['access_count'] > 2):
+                # STRICT thresholds - require strong semantic match OR very high importance
+                semantic_sim = result['semantic_similarity']
+                importance = result['importance_score']
+                access_count = result['access_count']
+                
+                # Only include if semantically relevant OR extremely important personal info
+                if (semantic_sim > 0.35 or  # Much higher semantic threshold
+                    (importance > 0.85 and result['metadata'].get('type') in ['personal', 'fact']) or  # Only very important personal facts
+                    (semantic_sim > 0.25 and access_count > 5)):  # Frequently accessed with some relevance
                     filtered_results.append(result)
             
             if filtered_results:
@@ -654,8 +723,8 @@ class AdvancedMemorySystem:
                                 'memory1': memory_ids[i],
                                 'memory2': memory_ids[j],
                                 'similarity': similarity_matrix[i][j],
-                                'content1': self.memory_nodes[memory_ids[i]].content[:100],
-                                'content2': self.memory_nodes[memory_ids[j]].content[:100]
+                                'content1': self.memory_nodes[memory_ids[i]].content[:100] if memory_ids[i] in self.memory_nodes else "Content not found",
+                                'content2': self.memory_nodes[memory_ids[j]].content[:100] if memory_ids[j] in self.memory_nodes else "Content not found"
                             })
             
             # Check for temporal inconsistencies
@@ -960,14 +1029,35 @@ def get_conversation_context(query: str, max_length: int = 2500) -> str:
         if not memories:
             return ""
         
-        # Build context string with quality filtering
+        # Build context string with STRICT quality filtering to prevent hallucinations
         context_lines = []
         total_length = 0
+        relevant_memories_found = 0
         
         for memory in memories:
-            if memory['composite_score'] > 0.3:  # Quality threshold
+            # Much stricter thresholds to prevent hallucinations
+            semantic_sim = memory.get('semantic_similarity', 0.0)
+            composite_score = memory.get('composite_score', 0.0)
+            mem_type = memory['metadata'].get('type', 'conversation')
+            importance = memory.get('importance_score', 0.0)
+            
+            # Anti-hallucination filter: Require STRONG semantic relevance
+            is_relevant = False
+            
+            # Check 1: Strong semantic similarity (main filter)
+            if semantic_sim > 0.4:
+                is_relevant = True
+            
+            # Check 2: Extremely important personal facts with some relevance
+            elif semantic_sim > 0.25 and importance > 0.85 and mem_type in ['personal', 'fact']:
+                is_relevant = True
+            
+            # Check 3: Previously discussed topic (high access count + some relevance)  
+            elif semantic_sim > 0.3 and memory.get('access_count', 0) > 3:
+                is_relevant = True
+            
+            if is_relevant:
                 role = memory['metadata'].get('role', 'user')
-                mem_type = memory['metadata'].get('type', 'conversation')
                 content = memory['text']
                 
                 # Format based on memory type
@@ -982,6 +1072,12 @@ def get_conversation_context(query: str, max_length: int = 2500) -> str:
                 
                 context_lines.append(line)
                 total_length += len(line)
+                relevant_memories_found += 1
+        
+        # Debug: Show what was filtered
+        if memories and relevant_memories_found == 0:
+            print(f"🚫 [Anti-hallucination] Filtered out {len(memories)} weak matches for '{query[:30]}...'")
+            print(f"   Best match had semantic similarity: {max([m.get('semantic_similarity', 0) for m in memories]):.3f}")
         
         return "\n".join(context_lines) if context_lines else ""
         
